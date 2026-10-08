@@ -1,0 +1,25 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true   # solo para pruebas locales -- NUNCA en producción
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+  voxdei:
+    build: .
+    environment:
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - SECRET_KEY=cambia-esto-por-algo-real
+    ports:
+      - "5000:5000"
+    depends_on:
+      - opensearch
+
+volumes:
+  opensearch-data:
