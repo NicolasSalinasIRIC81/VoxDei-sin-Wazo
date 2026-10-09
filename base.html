@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOC · {% block title %}Dashboard{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">&gt;_</div>
+    <div>
+      <h1>Panel de detección de amenazas</h1>
+      <div class="sub">VOXDEI</div>
+    </div>
+  </div>
+  <div class="status-line" style="display:flex; align-items:center; gap:14px;">
+    <div style="text-align:right;">
+      <div><span class="dot"></span>pipeline activo</div>
+      <div style="margin-top:4px;" id="lastUpdate">—</div>
+    </div>
+    <div class="role-badge role-{{ current_role|lower }}">
+      <span class="rdot"></span>{{ current_user }} · {{ current_role }}
+    </div>
+    <a href="{{ url_for('logout') }}" class="logout-link">Cerrar sesión</a>
+  </div>
+</header>
+
+<nav>
+  <a href="{{ url_for('resumen_page') }}" class="{{ 'active' if active == 'resumen' else '' }}">Resumen</a>
+  <a href="{{ url_for('alertas_page') }}" class="{{ 'active' if active == 'alertas' else '' }}">Alertas</a>
+  {% if role_at_least('Admin') %}
+  <a href="{{ url_for('mapa_page') }}" class="{{ 'active' if active == 'mapa' else '' }}">Mapa de amenazas</a>
+  {% endif %}
+  <a href="#" class="disabled" title="Aún no construido">ML</a>
+  {% if role_at_least('Admin') %}
+  <a href="{{ url_for('agentes_page') }}" class="{{ 'active' if active == 'agentes' else '' }}">Agentes</a>
+  {% endif %}
+</nav>
+
+{% block content %}{% endblock %}
+
+<footer>
+  <span>fuente: OpenSearch · índice suricata-alert-*</span>
+  <span id="footerNote">—</span>
+</footer>
+
+</body>
+</html>

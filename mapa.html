@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Mapa de amenazas{% endblock %}
+{% block content %}
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+  .leaflet-container{ background: var(--panel-2); font-family: var(--sans); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip{ background: var(--panel); color: var(--text); border:1px solid var(--border); }
+  .leaflet-popup-content{ font-family: var(--mono); font-size:12px; margin:10px 12px; }
+  .leaflet-control-zoom a{ background: var(--panel) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  .leaflet-control-attribution{ background: rgba(18,21,26,0.85) !important; color: var(--text-faint) !important; font-size:10px !important; }
+  .leaflet-control-attribution a{ color: var(--text-dim) !important; }
+</style>
+
+<div class="panel" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <h2>Origen de ataques en tiempo real</h2>
+    <span class="count" id="mapCount">cargando...</span>
+  </div>
+  <div id="map" style="height:480px; width:100%;"></div>
+  <div style="display:flex; gap:18px; padding:10px 16px; border-top:1px solid var(--border); font-family:var(--mono); font-size:11px; color:var(--text-dim);">
+    <div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d9534f;margin-right:6px;"></span>severidad crítica</div>
+    <div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e8a33d;margin-right:6px;"></span>severidad media</div>
+    <div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7c8592;margin-right:6px;"></span>severidad baja</div>
+    <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#5b9bd5;margin-right:6px;"></span>tu red</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h2>Top IPs / países origen</h2></div>
+  <div id="topCountries" style="padding:16px;"></div>
+</div>
+
+<script>
+const sevColor = { critica: '#d9534f', media: '#e8a33d', baja: '#7c8592' };
+
+const map = L.map('map', { zoomControl: true, worldCopyJump: true }).setView([20, 0], 2);
+
+// Tiles oscuros de CARTO (gratis, sin API key) para que combine con el tema
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+}).addTo(map);
+
+let markersLayer = L.layerGroup().addTo(map);
+let destMarker = null;
+
+function severityIcon(color, size) {
+  size = size || 12;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:0 0 6px ${color};"></div>`,
+    iconSize: [size, size]
+  });
+}
+
+async function loadMap() {
+  let data;
+  try {
+    const res = await fetch('/api/threat-map?hours=24');
+    data = await res.json();
+  } catch (e) {
+    document.getElementById('mapCount').textContent = 'error de conexión con el backend';
+    return;
+  }
+
+  markersLayer.clearLayers();
+
+  const dest = data.destination;
+  const destLatLng = [dest.lat, dest.lon];
+
+  if (!destMarker) {
+    destMarker = L.marker(destLatLng, { icon: severityIcon('#5b9bd5', 14) })
+      .addTo(map)
+      .bindPopup(dest.label);
+  }
+
+  const sources = data.sources || [];
+  document.getElementById('mapCount').textContent =
+    sources.length
+      ? `${sources.length} orígenes públicos activos · últimas 24h`
+      : 'sin orígenes públicos detectados en las últimas 24h';
+
+  sources.forEach(s => {
+    const color = sevColor[s.severity] || sevColor.baja;
+    const marker = L.marker([s.lat, s.lon], { icon: severityIcon(color) }).bindPopup(
+      `<b>${s.ip}</b><br>${s.city ? s.city + ', ' : ''}${s.country || 'desconocido'}<br>${s.count} alertas<br><i>${s.signature || ''}</i>`
+    );
+    const line = L.polyline([[s.lat, s.lon], destLatLng], {
+      color, weight: Math.min(1 + s.count / 5, 4), opacity: 0.5, dashArray: '4,4'
+    });
+    markersLayer.addLayer(line);
+    markersLayer.addLayer(marker);
+  });
+
+  renderCountryList(sources);
+  document.getElementById('lastUpdate').textContent =
+    'actualizado ' + new Date().toLocaleTimeString('es-MX', { hour12: false });
+}
+
+function renderCountryList(sources) {
+  const el = document.getElementById('topCountries');
+  if (!sources.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:0;">Sin datos en este rango.</div>';
+    return;
+  }
+  const max = Math.max(...sources.map(s => s.count));
+  el.innerHTML = sources.map(s => `
+    <div style="margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; margin-bottom:5px;">
+        <span>${s.ip} <span style="color:var(--text-faint);">(${s.country || '?'})</span></span>
+        <span style="color:var(--text-dim);">${s.count}</span>
+      </div>
+      <div style="height:5px; background:var(--panel-2); border-radius:3px; overflow:hidden;">
+        <div style="height:100%; border-radius:3px; width:${(s.count / max * 100).toFixed(0)}%; background:${sevColor[s.severity] || sevColor.baja};"></div>
+      </div>
+    </div>`).join('');
+}
+
+loadMap();
+setInterval(loadMap, 30000);
+</script>
+{% endblock %}

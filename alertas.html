@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Alertas{% endblock %}
+{% block content %}
+
+<div class="sev-strip" id="sevStrip">
+  <div class="sev-cell total selected" data-sev="todas">
+    <div class="info"><div class="label">Total (24h)</div><div class="value" id="kpiTotal">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell crit" data-sev="critica">
+    <div class="info"><div class="label">Críticas</div><div class="value" id="kpiCritica">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell media" data-sev="media">
+    <div class="info"><div class="label">Medias</div><div class="value" id="kpiMedia">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell baja" data-sev="baja">
+    <div class="info"><div class="label">Bajas</div><div class="value" id="kpiBaja">—</div></div>
+    <div class="bar"></div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <div class="search">
+    <span style="color:var(--text-faint); font-size:13px;">⌕</span>
+    <input type="text" id="searchInput" placeholder="Buscar por IP, firma o categoría...">
+  </div>
+  <div class="divider-v"></div>
+  <div class="chip active" id="chipHours" data-hours="24">Últimas 24h</div>
+  <div class="chip" id="chipHours1" data-hours="1">Última hora</div>
+  <div class="chip" id="chipHours168" data-hours="168">Últimos 7 días</div>
+  <div class="divider-v"></div>
+  <button class="btn" id="refreshBtn">↻ Actualizar</button>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Alertas</h2>
+    <span class="count" id="rangeCount">—</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th style="padding-left:16px;">Hora</th>
+          <th>IP origen</th>
+          <th>IP destino</th>
+          <th>Firma</th>
+          <th>Categoría</th>
+          <th>Severidad</th>
+          <th>Estado</th>
+          <th style="width:40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="alertRows">
+        <tr><td colspan="8" class="empty-state">Cargando alertas...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <span id="paginationInfo">—</span>
+    <div class="page-btns" id="pageBtns"></div>
+  </div>
+</div>
+
+<script>
+const state = { q: "", severity: "todas", hours: 24, page: 1, size: 20 };
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString('es-MX', { hour12: false });
+}
+
+function sevMapClass(sev) {
+  return { critica: "sev-critica", media: "sev-media", baja: "sev-baja" }[sev] || "sev-baja";
+}
+function rowClass(sev) {
+  return { critica: "is-critica", media: "is-media", baja: "is-baja" }[sev] || "";
+}
+
+async function loadAlerts() {
+  const tbody = document.getElementById('alertRows');
+  tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Cargando alertas...</td></tr>';
+
+  const params = new URLSearchParams({
+    q: state.q, severity: state.severity, hours: state.hours,
+    page: state.page, size: state.size
+  });
+
+  let data;
+  try {
+    const res = await fetch('/api/alerts?' + params.toString());
+    data = await res.json();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Error de conexión con el backend.</td></tr>';
+    return;
+  }
+
+  document.getElementById('kpiTotal').textContent =
+    data.severity_counts.critica + data.severity_counts.media + data.severity_counts.baja;
+  document.getElementById('kpiCritica').textContent = data.severity_counts.critica;
+  document.getElementById('kpiMedia').textContent = data.severity_counts.media;
+  document.getElementById('kpiBaja').textContent = data.severity_counts.baja;
+
+  document.getElementById('rangeCount').textContent =
+    `mostrando ${data.alerts.length} de ${data.total}`;
+
+  if (data.alerts.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No hay alertas en este rango. Prueba ampliar el periodo o quitar filtros.</td></tr>';
+  } else {
+    tbody.innerHTML = data.alerts.map(a => `
+      <tr class="${rowClass(a.severity)}">
+        <td style="padding-left:16px; color:var(--text-dim);">${fmtTime(a.timestamp)}</td>
+        <td class="ip">${a.src_ip || '—'}</td>
+        <td class="ip">${a.dest_ip || '—'}</td>
+        <td>${a.signature}</td>
+        <td><span class="cat-tag" title="${a.category}">${a.category}</span></td>
+        <td><span class="sev-pill ${sevMapClass(a.severity)}">${a.severity}</span></td>
+        <td>
+          <button class="status-pill ${a.status}" onclick="cycleStatus('${a.id}', '${a.status}')" title="Clic para cambiar estado">
+            <span class="sdot"></span>${a.status}
+          </button>
+        </td>
+        <td></td>
+      </tr>`).join('');
+  }
+
+  renderPagination(data.total);
+  document.getElementById('lastUpdate').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-MX', {hour12:false});
+  document.getElementById('footerNote').textContent = `rango: últimas ${state.hours}h`;
+}
+
+function renderPagination(total) {
+  const totalPages = Math.max(1, Math.ceil(total / state.size));
+  const el = document.getElementById('pageBtns');
+  document.getElementById('paginationInfo').textContent = `página ${state.page} de ${totalPages}`;
+
+  let html = `<div class="page-btn ${state.page <= 1 ? 'disabled' : ''}" onclick="goPage(${state.page - 1})">‹</div>`;
+  const start = Math.max(1, state.page - 2);
+  const end = Math.min(totalPages, start + 4);
+  for (let p = start; p <= end; p++) {
+    html += `<div class="page-btn ${p === state.page ? 'active' : ''}" onclick="goPage(${p})">${p}</div>`;
+  }
+  html += `<div class="page-btn ${state.page >= totalPages ? 'disabled' : ''}" onclick="goPage(${state.page + 1})">›</div>`;
+  el.innerHTML = html;
+}
+
+function goPage(p) {
+  if (p < 1) return;
+  state.page = p;
+  loadAlerts();
+}
+
+const STATUS_CYCLE = { abierta: "revision", revision: "cerrada", cerrada: "abierta" };
+
+async function cycleStatus(id, current) {
+  const next = STATUS_CYCLE[current];
+  try {
+    await fetch(`/api/alerts/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: next })
+    });
+    loadAlerts();
+  } catch (e) {
+    console.error('No se pudo actualizar el estado', e);
+  }
+}
+
+document.getElementById('sevStrip').addEventListener('click', (e) => {
+  const cell = e.target.closest('.sev-cell');
+  if (!cell) return;
+  document.querySelectorAll('.sev-cell').forEach(c => c.classList.remove('selected'));
+  cell.classList.add('selected');
+  state.severity = cell.dataset.sev;
+  state.page = 1;
+  loadAlerts();
+});
+
+document.querySelectorAll('.chip[data-hours]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip[data-hours]').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    state.hours = parseInt(chip.dataset.hours);
+    state.page = 1;
+    loadAlerts();
+  });
+});
+
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    state.q = e.target.value;
+    state.page = 1;
+    loadAlerts();
+  }, 400);
+});
+
+document.getElementById('refreshBtn').addEventListener('click', loadAlerts);
+
+loadAlerts();
+setInterval(loadAlerts, 30000); // auto-refresh cada 30s
+</script>
+{% endblock %}

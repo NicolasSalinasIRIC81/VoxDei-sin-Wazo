@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOXDEI · Acceso</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand" style="margin-bottom:20px;">
+      <div class="brand-mark">&gt;_</div>
+      <div>
+        <h1 style="font-size:18px;">Panel de detección de amenazas</h1>
+        <div class="sub">VOXDEI</div>
+      </div>
+    </div>
+
+    {% if error %}
+    <div class="login-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('login') }}?next={{ request.args.get('next', '') }}">
+      <label for="username">Usuario</label>
+      <input type="text" id="username" name="username" autocomplete="username" required>
+
+      <label for="password">Contraseña</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+      <button type="submit">Iniciar sesión</button>
+    </form>
+
+    <p class="login-note">
+      Usuarios de prueba (placeholder — ver <code>auth.py</code>): <code>operador</code>, <code>admin</code>, <code>superadmin</code>,
+      contraseña igual al usuario + "123" (ej. <code>admin123</code>).
+    </p>
+  </div>
+</div>
+
+</body>
+</html>

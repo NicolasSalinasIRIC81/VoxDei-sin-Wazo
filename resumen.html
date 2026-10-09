@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% block title %}Resumen{% endblock %}
+{% block content %}
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+
+<div class="sev-strip" id="kpiStrip" style="grid-template-columns: repeat(4,1fr);">
+  <div class="sev-cell total">
+    <div class="info"><div class="label">Alertas (24h)</div><div class="value" id="kpiTotal">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell crit">
+    <div class="info"><div class="label">Críticas</div><div class="value" id="kpiCritica">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell baja">
+    <div class="info"><div class="label">IPs origen únicas</div><div class="value" id="kpiIps">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell media">
+    <div class="info"><div class="label">Eventos/seg</div><div class="value" id="kpiEps">—</div></div>
+    <div class="bar"></div>
+  </div>
+</div>
+
+<div class="row" style="display:grid; grid-template-columns: 1.6fr 1fr; gap:16px; margin-bottom:16px;">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Conectividad · volumen de tráfico y alertas</h2>
+      <span class="count">últimas 24h</span>
+    </div>
+    {% if role_at_least('Admin') %}
+    <div class="chart-controls">
+      <select id="compareSelect">
+        <option value="">— sin comparar —</option>
+        <option value="1">Comparar alertas con el día anterior</option>
+      </select>
+    </div>
+    {% endif %}
+    <div style="padding:16px; position:relative; height:220px;">
+      <canvas id="timeChart"></canvas>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Distribución por severidad</h2>
+    </div>
+    <div style="padding:16px; position:relative; height:220px;">
+      <canvas id="sevChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <h2>Últimas alertas</h2>
+    <a href="{{ url_for('alertas_page') }}" style="font-family:var(--mono); font-size:11px; color:var(--text-dim); text-decoration:none;">ver todas →</a>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th style="padding-left:16px;">Hora</th>
+          <th>IP origen</th>
+          <th>IP destino</th>
+          <th>Firma</th>
+          <th style="padding-right:16px;">Severidad</th>
+        </tr>
+      </thead>
+      <tbody id="latestRows">
+        <tr><td colspan="5" class="empty-state">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:16px;">
+  <div class="panel-head">
+    <h2>Puertos atacados</h2>
+    <span class="count" id="portsCount">—</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th style="padding-left:16px;">Puerto</th>
+          <th>Servicio</th>
+          <th>Última vez</th>
+          <th>Ataques</th>
+          <th>IPs origen únicas</th>
+          <th>Firma más frecuente</th>
+          <th style="padding-right:16px;">Severidad</th>
+        </tr>
+      </thead>
+      <tbody id="portRows">
+        <tr><td colspan="6" class="empty-state">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+  <div class="panel">
+    <div class="panel-head"><h2>Top IPs origen</h2></div>
+    <div id="topIps" style="padding:16px;"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>Firmas más frecuentes</h2></div>
+    <div id="topSigs" style="padding:16px;"></div>
+  </div>
+</div>
+
+<script>
+let timeChart, sevChart;
+
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString('es-MX', { hour12: false });
+}
+function sevMapClass(sev) {
+  return { critica: "sev-critica", media: "sev-media", baja: "sev-baja" }[sev] || "sev-baja";
+}
+function rowClass(sev) {
+  return { critica: "is-critica", media: "is-media", baja: "is-baja" }[sev] || "";
+}
+
+function renderBars(elId, items, keyName, colorClass) {
+  const el = document.getElementById(elId);
+  if (!items.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:0;">Sin datos en este rango.</div>';
+    return;
+  }
+  const max = Math.max(...items.map(i => i.count));
+  el.innerHTML = items.map(i => `
+    <div style="margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; margin-bottom:5px;">
+        <span style="color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px;">${i[keyName]}</span>
+        <span style="color:var(--text-dim);">${i.count}</span>
+      </div>
+      <div style="height:5px; background:var(--panel-2); border-radius:3px; overflow:hidden;">
+        <div style="height:100%; border-radius:3px; width:${(i.count / max * 100).toFixed(0)}%; background:${colorClass};"></div>
+      </div>
+    </div>`).join('');
+}
+
+const userRole = "{{ current_role }}";
+const canCompare = {{ 'true' if role_at_least('Admin') else 'false' }};
+let comparePrev = false;
+
+if (canCompare) {
+  document.getElementById('compareSelect').addEventListener('change', (e) => {
+    comparePrev = e.target.value === '1';
+    loadSummary();
+  });
+}
+
+async function loadSummary() {
+  let data;
+  try {
+    const url = '/api/summary?hours=24' + (canCompare && comparePrev ? '&compare=1' : '');
+    const res = await fetch(url);
+    data = await res.json();
+  } catch (e) {
+    document.getElementById('latestRows').innerHTML =
+      '<tr><td colspan="5" class="empty-state">Error de conexión con el backend.</td></tr>';
+    return;
+  }
+
+  const sc = data.severity_counts || { critica: 0, media: 0, baja: 0 };
+  document.getElementById('kpiTotal').textContent = sc.critica + sc.media + sc.baja;
+  document.getElementById('kpiCritica').textContent = sc.critica;
+  document.getElementById('kpiIps').textContent = data.unique_src_ips ?? '—';
+  document.getElementById('kpiEps').textContent = data.events_per_sec ?? '—';
+
+  // --- gráfica de conectividad: alertas vs volumen total de tráfico ---
+  // (equivalente a la RSSI/Latencia de doble eje del prototipo anterior:
+  // aquí el "RSSI" es el volumen de tráfico crudo y la "Latencia" es el
+  // volumen de alertas — dos series de magnitud distinta, mismo eje de tiempo)
+  const labels = (data.alerts_by_hour || []).map(b => b.hour);
+  const alertCounts = (data.alerts_by_hour || []).map(b => b.count);
+
+  const datasets = [{
+    label: 'Alertas',
+    data: alertCounts, borderColor: '#e8a33d', backgroundColor: 'rgba(232,163,61,0.10)',
+    fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y'
+  }];
+
+  let scalesY1 = {};
+
+  if (userRole === 'Operador') {
+    // Vista simplificada: solo la línea de alertas, sin segundo eje ni
+    // comparación — lo mismo que ya veía el Operador en ORIX (sin
+    // tecnicismos de RF/dual-axis).
+  } else {
+    // Admin / SuperAdmin: doble eje con volumen total de tráfico.
+    const eventCounts = (data.events_by_hour || []).map(b => b.count);
+    datasets.push({
+      label: 'Eventos totales (tráfico)',
+      data: eventCounts, borderColor: '#5b9bd5', backgroundColor: 'rgba(91,155,213,0.08)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1'
+    });
+    scalesY1 = {
+      y1: { position: 'right', grid: { drawOnChartArea: false }, beginAtZero: true, ticks: { precision: 0, color: '#7c8592' } }
+    };
+
+    if (comparePrev && data.alerts_by_hour_prev && data.alerts_by_hour_prev.length) {
+      datasets.push({
+        label: 'Alertas (día anterior)',
+        data: data.alerts_by_hour_prev.map(b => b.count),
+        borderColor: '#7c8592', backgroundColor: 'transparent', borderDash: [5, 3],
+        fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y'
+      });
+    }
+  }
+
+  if (timeChart) timeChart.destroy();
+  timeChart = new Chart(document.getElementById('timeChart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      plugins: {
+        legend: { display: userRole !== 'Operador', labels: { color: '#7c8592', boxWidth: 10, font: { size: 10.5 } } }
+      },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { grid: { color: '#1c2129' }, ticks: { color: '#7c8592' } },
+        y: { grid: { color: '#1c2129' }, beginAtZero: true, ticks: { precision: 0, color: '#7c8592' } },
+        ...scalesY1
+      }
+    }
+  });
+
+  // --- distribución por severidad ---
+  if (sevChart) sevChart.destroy();
+  sevChart = new Chart(document.getElementById('sevChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Baja', 'Media', 'Crítica'],
+      datasets: [{ data: [sc.baja, sc.media, sc.critica], backgroundColor: ['#3a4048', '#e8a33d', '#d9534f'], borderColor: '#12151a', borderWidth: 2 }]
+    },
+    options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 8, padding: 14, font: { size: 11 } } } } }
+  });
+
+  // --- últimas alertas ---
+  const latestEl = document.getElementById('latestRows');
+  if (!data.latest_alerts || data.latest_alerts.length === 0) {
+    latestEl.innerHTML = '<tr><td colspan="5" class="empty-state">No hay alertas recientes.</td></tr>';
+  } else {
+    latestEl.innerHTML = data.latest_alerts.map(a => `
+      <tr class="${rowClass(a.severity)}">
+        <td style="padding-left:16px; color:var(--text-dim);">${fmtTime(a.timestamp)}</td>
+        <td class="ip">${a.src_ip || '—'}</td>
+        <td class="ip">${a.dest_ip || '—'}</td>
+        <td>${a.signature}</td>
+        <td style="padding-right:16px;"><span class="sev-pill ${sevMapClass(a.severity)}">${a.severity}</span></td>
+      </tr>`).join('');
+  }
+
+  renderBars('topIps', data.top_src || [], 'ip', 'var(--red)');
+  renderBars('topSigs', data.top_sig || [], 'signature', 'var(--amber)');
+  renderPorts(data.top_ports || []);
+
+  document.getElementById('lastUpdate').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-MX', { hour12: false });
+}
+
+function renderPorts(ports) {
+  const tbody = document.getElementById('portRows');
+  document.getElementById('portsCount').textContent = `${ports.length} puertos con actividad`;
+
+  if (!ports.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Sin ataques registrados en este rango.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = ports.map(p => `
+    <tr class="${rowClass(p.severity)}">
+      <td style="padding-left:16px; color:var(--text);">${p.port}</td>
+      <td style="color:var(--text-dim);">${p.service}</td>
+      <td style="color:var(--text-dim);">${p.last_seen ? fmtTime(p.last_seen) : '—'}</td>
+      <td>${p.count}</td>
+      <td style="color:var(--text-dim);">${p.unique_src}</td>
+      <td style="color:var(--text-dim); font-size:12px;">${p.top_signature || '—'}</td>
+      <td style="padding-right:16px;"><span class="sev-pill ${sevMapClass(p.severity)}">${p.severity}</span></td>
+    </tr>`).join('');
+}
+
+loadSummary();
+setInterval(loadSummary, 30000);
+</script>
+{% endblock %}

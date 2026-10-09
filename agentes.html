@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Agentes{% endblock %}
+{% block content %}
+
+<div class="sev-strip" id="kpiStrip" style="grid-template-columns: repeat(3,1fr);">
+  <div class="sev-cell total">
+    <div class="info"><div class="label">Agentes detectados</div><div class="value" id="kpiTotal">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell crit">
+    <div class="info"><div class="label">Sin conexión</div><div class="value" id="kpiOffline">—</div></div>
+    <div class="bar"></div>
+  </div>
+  <div class="sev-cell media">
+    <div class="info"><div class="label">Eventos recibidos (1h)</div><div class="value" id="kpiEvents">—</div></div>
+    <div class="bar"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>Agentes</h2>
+    <span class="count" id="agentCount">—</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th style="padding-left:16px;">Hostname</th>
+          <th>Tipos de log</th>
+          <th>Eventos totales</th>
+          <th>Último log recibido</th>
+          <th style="padding-right:16px;">Estado</th>
+        </tr>
+      </thead>
+      <tbody id="agentRows">
+        <tr><td colspan="5" class="empty-state">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function fmtAge(seconds) {
+  if (seconds === null || seconds === undefined) return 'nunca';
+  if (seconds < 60) return `hace ${Math.round(seconds)}s`;
+  if (seconds < 3600) return `hace ${Math.round(seconds / 60)}m`;
+  return `hace ${Math.round(seconds / 3600)}h`;
+}
+
+function statusClass(status) {
+  return { online: 'abierta', degradado: 'revision', offline: 'cerrada' }[status] || 'cerrada';
+  // reutilizamos los colores de status-pill de alertas: verde/ambar/rojo
+}
+
+async function loadAgents() {
+  const tbody = document.getElementById('agentRows');
+  let data;
+  try {
+    const res = await fetch('/api/agents');
+    data = await res.json();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Error de conexión con el backend.</td></tr>';
+    return;
+  }
+
+  const agents = data.agents || [];
+  document.getElementById('kpiTotal').textContent = agents.length;
+  document.getElementById('kpiOffline').textContent = agents.filter(a => a.status === 'offline').length;
+  document.getElementById('kpiEvents').textContent = data.total_events_1h ?? 0;
+  document.getElementById('agentCount').textContent = `${agents.length} agentes registrados`;
+
+  if (agents.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">
+      Todavía no ha llegado ningún log de agentes.<br>
+      <span style="font-size:11px;">Configura Fluent Bit en un servidor para que reenvíe al puerto 24224 de este colector.</span>
+    </td></tr>`;
+  } else {
+    tbody.innerHTML = agents.map(a => `
+      <tr>
+        <td style="padding-left:16px; color:var(--text);">${a.hostname}</td>
+        <td style="color:var(--text-dim); font-size:12px;">${a.log_types.join(', ') || '—'}</td>
+        <td style="color:var(--text-dim);">${a.event_count}</td>
+        <td style="color:var(--text-dim);">${fmtAge(a.age_seconds)}</td>
+        <td style="padding-right:16px;">
+          <span class="status-pill ${statusClass(a.status)}" style="cursor:default;">
+            <span class="sdot"></span>${a.status}
+          </span>
+        </td>
+      </tr>`).join('');
+  }
+
+  document.getElementById('lastUpdate').textContent =
+    'actualizado ' + new Date().toLocaleTimeString('es-MX', { hour12: false });
+}
+
+loadAgents();
+setInterval(loadAgents, 15000);
+</script>
+{% endblock %}
